@@ -1,0 +1,17 @@
+annotated-types==0.7.0
+anyio==4.12.1
+certifi==2026.2.25
+ecdsa==0.19.1
+h11==0.16.0
+http-utils @ git+https://github.com/sidorov-works/http_utils.git@9d17d759dbb68a78f3a5138373c0103818887ef7
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.11
+pyasn1==0.6.2
+pydantic==2.12.5
+pydantic_core==2.41.5
+python-jose==3.5.0
+rsa==4.9.1
+six==1.17.0
+typing-inspection==0.4.2
+typing_extensions==4.15.0
