@@ -663,7 +663,3 @@ class EncoderClient:
         self._http_clients = {name: None for name in self._encoders}
         self._batch_clients = {name: None for name in self._encoders}
         logger.debug("EncoderClient closed")
-
-
-# Глобальный экземпляр
-encoder_client = EncoderClient()

@@ -1,235 +1,165 @@
-# HTTP Utils
+# TEI Utils
 
-Асинхронный HTTP-клиент с повторными попытками и автоматической подписью запросов для межсервисного взаимодействия.
+Асинхронный Python клиент для одновременных запросов к нескольким TEI-серверам (Hugging Face Text Embeddings Inference).
 
-## Возможности
+## Ключевая особенность
 
-- Автоматические повторные попытки с экспоненциальной задержкой и jitter
-- Контроль общего времени выполнения всех попыток (total_timeout)
-- Автоматическая подпись запросов:
-  - JWT токены с коротким сроком жизни (HS256)
-  - Простые секретные заголовки (X-API-Key и т.п.)
-- HTTP/2 поддержка через httpx
-- Пул соединений с настраиваемыми лимитами
-- Гибкая настройка retry-логики
-- Полная типизация и докстринги
+**Работа с несколькими TEI серверами одновременно** — клиент позволяет объединить несколько моделей эмбеддингов в одном интерфейсе и получать векторы от всех моделей параллельно за один вызов.
+
+```python
+# Один клиент — несколько моделей
+client = EncoderClient(
+    encoders={
+        "bge-small": "http://localhost:8080",   # быстрая модель
+        "bge-large": "http://localhost:8081",   # точная модель
+        "e5-mistral": "http://localhost:8082"   # мультиязычная
+    },
+    secret="your-secret"
+)
+
+# Получаем эмбеддинги от всех моделей одновременно
+vectors = await client.encode_text("Hello world")
+# {
+#     "bge-small": [0.1, 0.2, ...],   # 384-dim
+#     "bge-large": [0.3, 0.4, ...],   # 1024-dim
+#     "e5-mistral": [0.5, 0.6, ...]   # 4096-dim
+# }
+```
 
 ## Установка
 
-### Из git-репозитория
-
 ```bash
-# Через SSH
-pip install git+ssh://git@github.com/sidorov-works/http_utils.git@v0.1.0
-
-# Через HTTPS
-pip install git+https://github.com/sidorov-works/http_utils.git@v0.1.0
+pip install git+https://github.com/sidorov-works/tei_utils.git
 ```
 
-### Локальная установка для разработки
+## Инициализация клиента
 
-```bash
-git clone https://github.com/sidorov-works/http_utils.git
-cd retryable_http_client
-pip install -e .[dev]
+```python
+from tei_utils import EncoderClient, PromptType
+
+client = EncoderClient(
+    # Словарь энкодеров: имя -> URL
+    encoders={
+        "bge-small": "http://localhost:8080",     # локальный TEI
+        "bge-large": "http://localhost:8081",     # другой порт
+        "e5-mistral": "https://tei.example.com"   # удаленный сервер
+    },
+    
+    # Секретный ключ для Bearer аутентификации
+    secret="your-secret-key",
+    
+    # Таймаут на один HTTP запрос (секунды)
+    request_timeout=30.0,
+    
+    # Общий таймаут с учетом всех повторных попыток
+    total_timeout=60.0
+)
 ```
 
-### Как зависимость в другом проекте
+**Важно:**
+- URL энкодеров должны указывать на корень TEI сервиса (например, `http://localhost:8080`)
+- Все энкодеры используют единый секретный ключ для Bearer аутентификации
+- Клиент автоматически запрашивает `/info` при первом обращении к энкодеру
+- Информация об энкодере (размерность вектора, максимальная длина) кэшируется
 
-В pyproject.toml:
-```toml
-[project]
-dependencies = [
-    "http-utils @ git+https://github.com/sidorov-works/http_utils.git@v0.1.0"
+## Использование
+
+### Кодирование текстов
+
+```python
+# Одиночный текст
+result = await client.encode_text("What is machine learning?")
+# {
+#     "bge-small": [0.12, -0.34, ...],   # один вектор
+#     "bge-large": [0.56, -0.78, ...]    # один вектор
+# }
+
+# Пакет текстов
+texts = [
+    "Machine learning is...",
+    "Deep learning is...",
+    "Neural networks..."
 ]
-```
+batch_result = await client.encode_batch(texts)
+# {
+#     "bge-small": [[...], [...], [...]],   # три вектора
+#     "bge-large": [[...], [...], [...]]    # три вектора
+# }
 
-В requirements.txt:
-```
-http-utils @ git+https://github.com/sidorov-works/http_utils.git@v0.1.0
-```
-
-## Быстрый старт
-
-### Базовое использование
-
-```python
-import asyncio
-from http_utils import RetryableHTTPClient
-
-async def main():
-    # Создаем клиент с кастомными настройками
-    client = RetryableHTTPClient(
-        base_timeout=5.0,      # таймаут на один запрос
-        max_retries=3,          # максимум повторных попыток
-        base_delay=1.0,         # начальная задержка
-        max_delay=10.0,         # максимальная задержка
-        total_timeout=30.0      # общий таймаут на все попытки
-    )
-    
-    # Используем как контекстный менеджер
-    async with client:
-        response = await client.get_with_retry("https://api.example.com/data")
-        print(response.json())
-
-asyncio.run(main())
-```
-
-### JWT-аутентификация
-
-```python
-from http_utils import RetryableHTTPClient, create_signed_client, AuthType
-
-async def main():
-    # Базовый клиент
-    base_client = RetryableHTTPClient()
-    
-    # Оборачиваем для автоматической JWT-подписи
-    signed_client = create_signed_client(
-        base_client=base_client,
-        secret="your-secret-key",           # секрет для подписи JWT
-        service_name="my-service",           # имя сервиса-отправителя
-        auth_type=AuthType.JWT_AUTH,         # используем JWT
-        jwt_algorithm="HS256",                # алгоритм подписи
-        jwt_token_expire=30,                   # токен живет 30 секунд
-        jwt_extra_payload={"request_id": "123"} # доп. данные в токене
-    )
-    
-    async with signed_client:
-        # Заголовок Authorization: Bearer <JWT-токен> добавится автоматически
-        response = await signed_client.post_with_retry(
-            "https://api.example.com/data",
-            json={"key": "value"}
-        )
-
-asyncio.run(main())
-```
-
-### Аутентификация через секретный заголовок
-
-```python
-signed_client = create_signed_client(
-    base_client=base_client,
-    secret="api-key-12345",                   # значение заголовка
-    auth_type=AuthType.SECRET_HEADER_AUTH,    # используем простой заголовок
-    auth_header_name="X-API-Key",              # кастомное имя заголовка
-    auth_header_scheme=None                     # без схемы (просто значение)
+# С указанием типа промпта (для моделей, обученных на пары query/document)
+query_vector = await client.encode_text(
+    "search query",
+    prompt_type=PromptType.QUERY
 )
-
-# Заголовок: X-API-Key: api-key-12345
-```
-
-## Документация API
-
-### RetryableHTTPClient
-
-Основной класс клиента с повторными попытками.
-
-**Параметры конструктора:**
-
-| Параметр | Тип | По умолчанию | Описание |
-|----------|-----|--------------|----------|
-| base_timeout | float | 10 | Таймаут каждого отдельного запроса в секундах |
-| max_retries | int | 3 | Максимальное количество повторных попыток |
-| base_delay | float | 1.0 | Начальная задержка перед повторной попыткой в секундах |
-| max_delay | float | 30.0 | Максимальная задержка между попытками в секундах |
-| total_timeout | Optional[float] | None | Общий таймаут на все попытки в секундах |
-
-**Методы:**
-
-- `request_with_retry(method, url, headers=None, success_statuses={200}, **kwargs)` - базовый метод для любого HTTP метода
-- `get_with_retry(url, headers=None, success_statuses={200}, **kwargs)` - GET запрос
-- `post_with_retry(url, headers=None, success_statuses={200}, **kwargs)` - POST запрос
-- `put_with_retry(url, headers=None, success_statuses={200}, **kwargs)` - PUT запрос
-- `delete_with_retry(url, headers=None, success_statuses={200, 204}, **kwargs)` - DELETE запрос
-- `close()` - явное закрытие клиента
-
-### create_jwt_token
-
-Создание JWT токена для межсервисной аутентификации.
-
-```python
-from http_utils import create_jwt_token
-
-token = create_jwt_token(
-    secret_key="secret",
-    service_name="my-service",
-    token_expire_seconds=30,
-    algorithm="HS256",
-    extra_payload={"request_id": "123"}
+doc_vector = await client.encode_text(
+    "document text",
+    prompt_type=PromptType.DOCUMENT
 )
 ```
 
-**Параметры:**
-
-- `secret_key: str` - секретный ключ для подписи токена
-- `service_name: str` - идентификатор сервиса-отправителя
-- `token_expire_seconds: int` - время жизни токена в секундах (по умолчанию 30)
-- `algorithm: str` - алгоритм подписи (по умолчанию "HS256")
-- `extra_payload: Optional[Dict]` - дополнительные данные для включения в токен
-
-### create_signed_client
-
-Обертка для автоматической подписи запросов.
-
-**Параметры:**
-
-| Параметр | Тип | По умолчанию | Описание |
-|----------|-----|--------------|----------|
-| base_client | RetryableHTTPClient | обязательный | Исходный клиент |
-| secret | str | обязательный | Секретный ключ |
-| service_name | str | "encoder-client" | Имя сервиса |
-| auth_type | AuthType | AuthType.JWT_AUTH | Тип аутентификации |
-| jwt_algorithm | Optional[str] | "HS256" | Алгоритм JWT |
-| jwt_token_expire | Optional[int] | 30 | Время жизни JWT |
-| jwt_extra_payload | Optional[Dict] | None | Доп. данные для JWT |
-| auth_header_name | str | "Authorization" | Имя заголовка |
-| auth_header_scheme | str | "Bearer" | Схема аутентификации |
-
-### AuthType
-
-Перечисление типов аутентификации:
-
-- `AuthType.JWT_AUTH` - JWT токен (Authorization: Bearer <token>)
-- `AuthType.SECRET_HEADER_AUTH` - простой секретный заголовок
-
-## Логирование
-
-Библиотека использует стандартный модуль logging. Для включения логов:
+### Подсчет токенов
 
 ```python
-import logging
-logging.basicConfig(level=logging.INFO)
+# Одиночный текст
+tokens = await client.count_tokens("Hello world")
+# {"bge-small": 2, "bge-large": 2}
+
+# Пакет текстов
+tokens_batch = await client.count_tokens_batch(["Hello", "World", "!"])
+# {"bge-small": [1, 1, 1], "bge-large": [1, 1, 1]}
 ```
 
-## Разработка и тестирование
+### Работа с отдельными энкодерами
 
-```bash
-# Клонировать репозиторий
-git clone https://github.com/yourusername/retryable_http_client.git
-cd retryable_http_client
+```python
+# Получить информацию только для конкретной модели
+dimension = await client.get_vector_size("bge-small")     # 384
+max_length = await client.get_max_length("bge-small")     # 512
+model_name = await client.get_model_name("bge-small")     # "BAAI/bge-small-en-v1.5"
 
-# Создать виртуальное окружение
-python -m venv venv
-source venv/bin/activate  # или venv\Scripts\activate на Windows
+# Проверка доступности
+is_healthy = await client.health_check("bge-small")       # True/False
+all_healthy = await client.health_check_all()             # {"bge-small": True, ...}
 
-# Установить в режиме разработки с зависимостями для тестирования
-pip install -e .[dev]
-
-# Запустить тесты
-pytest tests/
+# Использовать только определенные энкодеры
+vectors = await client.encode_text(
+    "Hello",
+    use_encoders=["bge-small"]  # только эта модель
+)
 ```
+
+### Обработка ошибок
+
+```python
+# Клиент возвращает None для недоступных энкодеров
+vectors = await client.encode_text("Hello")
+# {
+#     "bge-small": [0.1, 0.2, ...],  # доступен
+#     "bge-large": None              # недоступен
+# }
+
+# Проверяйте наличие результата
+if vectors["bge-large"] is None:
+    print("BGE Large is not available")
+```
+
+## Особенности
+
+- 🔄 **Автоматический батчинг** — клиент сам разбивает большие списки текстов на части, учитывая `max_client_batch_size` из `/info`
+- ⚡ **Параллельные запросы** — при работе с несколькими энкодерами запросы выполняются одновременно
+- 🔁 **Повторные попытки** — экспоненциальная задержка с jitter для сетевых ошибок и 5xx/429 статусов
+- 💾 **Ленивая инициализация** — HTTP клиенты создаются только при первом обращении к энкодеру
+- 🔐 **Bearer аутентификация** — автоматическое добавление `Authorization: Bearer <secret>` к каждому запросу
+- 📝 **Pydantic валидация** — строгая типизация запросов и ответов TEI
+- 🏥 **Health check перед запросами** — клиент проверяет доступность энкодеров перед отправкой
 
 ## Требования
 
 - Python >= 3.9
-- httpx >= 0.28.1
-- python-jose >= 3.5.0
+- `httpx >= 0.28.1` — HTTP клиент
+- `pydantic >= 2.12.5` — валидация данных
+- `http-utils` — обертка с ретраями и аутентификацией
 
 ## Лицензия
 
 MIT
-
-## Авторы
-
-Oleg Sidorov (sidorov.works@yandex.ru)
