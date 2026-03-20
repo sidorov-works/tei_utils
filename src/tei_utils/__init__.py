@@ -1,8 +1,9 @@
 # src/tei_utils/__init__.py
 
-from .client import EncoderClient
+from .client import EncoderClient, PromptType
 
 # Это то, что будет доступно при "from tei_client import *"
 __all__ = [
-    "EncoderClient"
+    "EncoderClient",
+    "PromptType"
 ]
