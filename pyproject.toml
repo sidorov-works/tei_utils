@@ -9,7 +9,7 @@ requires-python = ">=3.9"
 dependencies = [
     "httpx>=0.28.1",
     "pydantic>=2.12.5",
-    "http-utils @ git+https://github.com/sidorov-works/http_utils.git@9d17d759dbb68a78f3a5138373c0103818887ef7"
+    "http-utils @ git+https://github.com/sidorov-works/http_utils.git@v0.1.0"
 ]
 
 [project.optional-dependencies]
