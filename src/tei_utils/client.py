@@ -15,14 +15,31 @@ from .tei_models import (
 from typing import List, Optional, Dict, Any, Union
 import asyncio
 from http_utils import RetryableHTTPClient, create_signed_client, AuthType
+from enum import Enum
 
 import logging
 logger = logging.getLogger(__name__)
 
+class EPNames(Enum):
+    """
+    Названия используемых эндпойнтов TEI
+    """
+    EMBED = "/embed"                   
+    TOKENIZE = "/tokenize"
+    INFO = "/info"
+    HEALTH = "/health"
+
+class PromptType(Enum):
+    """
+    Типы промптов для TEI
+    """
+    QUERY = "query"
+    DOCUMENT = "document"
+
 # Структура InfoResponse содержит не все данные, 
 # необходимые для работы клиента. В частности TEI не сообщают 
 # в ответе /info важнейший параметр - размерность вектора. 
-# Поэтому создадим отдельную pydantic модель EncoderInfo, 
+# Поэтому создадим дополнительную pydantic модель EncoderInfo, 
 # в которой данный параметр (dimension) будет присутствовать
 class EncoderInfo(InfoResponse):
     dimension: Optional[int] = None
@@ -40,8 +57,8 @@ class EncoderClient:
             self,
             encoders: Dict[str, str],
             secret: str,
-            base_timeout: float = 30.0,
-            batch_timeout: float = 60.0
+            request_timeout: float = 30.0,
+            total_timeout: float = 60.0
         ):
         """
         Инициализация клиента.
@@ -49,15 +66,19 @@ class EncoderClient:
         Args:
             encoders: словарь, ключи которого являются именами TEI сервисов, 
                 а значения - их URL.
+
             secret: секретный ключ для аутентификации в TEI сервисах
-            base_timeout: тайм-аут на выполнение операций с одним текстом
-            batch_timeout: тайм-аут на выполнение батчевых операций
+
+            request_timeout: тайм-аут на выполнение запроса к TEI (без учета ретраев)
+
+            total_timeout: общий тайм-аут на выполнени запроса к TEI с ретраями 
+                (включает как отдельные попытки, так и задержки между попытками)
         """
 
         self._secret = secret
 
-        self._base_timeout = base_timeout
-        self._batch_timeout = batch_timeout
+        self._request_timeout = request_timeout
+        self._total_timeout = total_timeout
 
         if encoders and isinstance(encoders, dict):
             self._encoders: Dict[str, str] = encoders.copy()    
@@ -65,23 +86,19 @@ class EncoderClient:
             # Если не передали данные сервисов, то дальше инициализировать нечего
             logger.warning("EncoderClient initialized with no encoders")
             self._encoder_info = dict()
-            self._base_clients = dict()
-            self._batch_clients = dict()
+            self._http_clients = dict()
             self._init_locks = dict()
             return
         
         # Сюда попадаем, если какие-то энкодеры переданы
 
-        # Кэш метаданных энкодеров (тип InfoResponse)
+        # Кэш метаданных энкодеров
         self._encoder_info: Dict[str, Optional[EncoderInfo]] = {
             name: None for name in self._encoders
         }
         
         # HTTP клиенты для каждого энкодера
-        self._base_clients: Dict[str, Optional[RetryableHTTPClient]] = {
-            name: None for name in self._encoders
-        }
-        self._batch_clients: Dict[str, Optional[RetryableHTTPClient]] = {
+        self._http_clients: Dict[str, Optional[RetryableHTTPClient]] = {
             name: None for name in self._encoders
         }
         
@@ -96,51 +113,38 @@ class EncoderClient:
     # Приватные методы: инициализация HTTP клиентов
     # ----------------------------------------------------------------------
     
-    async def _get_base_client(self, encoder_name: str) -> Optional[RetryableHTTPClient]:
-        """Ленивое получение HTTP клиента для базовых запросов."""
-        if encoder_name not in self._base_clients:
+    def _get_http_client(self, encoder_name: str) -> Optional[RetryableHTTPClient]:
+        """
+        Ленивое получение HTTP клиента для базовых запросов.
+
+        TEI использует базовую аутентификацию запросов:
+        `auth_header_name: str = "Authorization"`, `auth_header_scheme: str = "Bearer"`
+
+        Возвращает None, если имя encoder_name не знакомо клиенту.
+        """
+        # Возвращаем None, если имя encoder_name не знакомо
+        if encoder_name not in self._http_clients:
             logger.error(f"Unknown encoder: {encoder_name}")
             return None
         
-        if self._base_clients[encoder_name] is None:
+        if self._http_clients[encoder_name] is None:
             client = RetryableHTTPClient(
-                base_timeout=self._base_timeout,
+                base_timeout=self._request_timeout,
                 max_retries=3,
                 base_delay=1.0,
                 max_delay=10.0,
-                total_timeout=self._base_timeout * 2
+                total_timeout=self._request_timeout * 2
             )
-            self._base_clients[encoder_name] = create_signed_client(
+            # Оборачиваем http клиента для автоматического подписания запросов
+            self._http_clients[encoder_name] = create_signed_client(
                 client,
                 secret=self._secret,
                 service_name="encoder-client",
                 auth_type=AuthType.SECRET_HEADER_AUTH
             )
         
-        return self._base_clients[encoder_name]
+        return self._http_clients[encoder_name]
     
-    async def _get_batch_client(self, encoder_name: str) -> Optional[RetryableHTTPClient]:
-        """Ленивое получение HTTP клиента для пакетных запросов."""
-        if encoder_name not in self._batch_clients:
-            logger.error(f"Unknown encoder: {encoder_name}")
-            return None
-        
-        if self._batch_clients[encoder_name] is None:
-            client = RetryableHTTPClient(
-                base_timeout=self._batch_timeout,
-                max_retries=3,
-                base_delay=1.0,
-                max_delay=10.0,
-                total_timeout=self._batch_timeout * 2
-            )
-            self._batch_clients[encoder_name] = create_signed_client(
-                client,
-                secret=self._secret,
-                service_name="encoder-client",
-                auth_type=AuthType.SECRET_HEADER_AUTH
-            )
-        
-        return self._batch_clients[encoder_name]
     
     # ----------------------------------------------------------------------
     # Приватные методы: получение информации об энкодерах
@@ -153,7 +157,7 @@ class EncoderClient:
         через отдельный вызов `"/embed"` (оригинальный *TEI* не включает 
         информацию о размерности вектора эмбеддинговой модели в ответ `"/info"`).
 
-        Возвращает типизированный `EncoderInfo` - это `InfoResponse` с доп. атрибутом `dimension`.
+        Возвращает `EncoderInfo` - это `InfoResponse` с доп. атрибутом `dimension`.
         """
         if self._encoder_info.get(encoder_name) is not None:
             return self._encoder_info[encoder_name]
@@ -166,12 +170,12 @@ class EncoderClient:
             if self._encoder_info[encoder_name] is not None:
                 return self._encoder_info[encoder_name]
             
-            client = await self._get_base_client(encoder_name)
+            client = self._get_http_client(encoder_name)
             if not client:
                 return None
             
             try:
-                info_url = f"{self._encoders[encoder_name]}/info"
+                info_url = f"{self._encoders[encoder_name]}{EPNames.INFO}"
                 logger.debug(f"Fetching info from {encoder_name} at {info_url}")
                 
                 info_response = await client.get_with_retry(
@@ -184,7 +188,7 @@ class EncoderClient:
                 encoder_info = EncoderInfo(**data)
 
                 # Теперь с помощью отдельного запроса /embed выясним размерность вектора
-                embed_url = f"{self._encoders[encoder_name]}/embed"
+                embed_url = f"{self._encoders[encoder_name]}{EPNames.EMBED}"
                 logger.debug(f"Fetching {encoder_name} vector dimension at {embed_url}")
                 TEST_TEXT = "i"
                 embed_request = EmbedRequest(TEST_TEXT)
@@ -206,116 +210,171 @@ class EncoderClient:
             except Exception as e:
                 logger.warning(f"Failed to get info from encoder '{encoder_name}': {e}")
                 return None
+            
+    async def _check_encoder_health(self, encoder_name: str) -> bool:
+        http_client = self._get_http_client(encoder_name)
+        if http_client:
+            try:
+                health_url = f"{self._encoders[encoder_name]}{EPNames.HEALTH}"
+                health_response = await http_client.get_with_retry(health_url)
+                return True
+            except:
+                logger.debug(f"Failed to check encoder {encoder_name} /health")
+                return False
+        else:
+            logger.debug(f"Unknown encoder name: {encoder_name}")
+            return False
     
     async def _ensure_encoders(self, encoder_names: List[str]) -> List[str]:
         """Проверяет доступность запрошенных энкодеров и вовращает только живые"""
         available = []
         
         for name in encoder_names:
-            # info = await self._get_encoder_info(name)
-            # if info and info.status == "operational":
-            #     available.append(name)
-            # else:
-            #     logger.warning(f"Encoder '{name}' is not available")
-            pass # тут нужно вызывать /health, а не /info
-        
+            if await self._check_encoder_health(name):
+                available.append(name)
         return available
     
     # ----------------------------------------------------------------------
-    # Приватные методы: выполнение запросов к TEI с использованием моделей
+    # Приватные методы: выполнение запросов к TEI
     # ----------------------------------------------------------------------
     
     async def _request_embed(
         self,
         encoder_name: str,
         inputs: Union[str, List[str]],
-        request_type: Optional[str] = None,
-        normalize: bool = True,
-        is_batch: bool = False
-    ) -> Optional[Union[List[float], List[List[float]]]]:
+        prompt_type: Optional[str] = None,
+        normalize: bool = True
+    ) -> Optional[List[List[float]]]:
         """
         Выполняет запрос к TEI /embed endpoint
+
+        Автоматически делит входной батчи на части в соответствии 
+        с ограничением энкодера (у TEI есть max_client_batch_size)
         """
-        client = await (self._get_batch_client(encoder_name) if is_batch 
-                       else self._get_base_client(encoder_name))
-        
+        client = self._get_http_client(encoder_name) 
         if not client:
             return None
         
+        enc_info = await self._get_encoder_info(encoder_name)
+        if not enc_info:
+            return None
+        
+        # Будем учитывать ограничение конкретного TEI на размер батча
+        max_batch_size = enc_info.max_client_batch_size
+        
         try:
-            url = f"{self._encoders[encoder_name]}/embed"
-            
-            # Создаём типизированный запрос
-            request = EmbedRequest(
-                inputs=inputs,
-                prompt_name=request_type,
-                normalize=normalize,
-                truncate=True
-            )
-            
-            response = await client.post_with_retry(
-                url=url,
-                json=request.model_dump(exclude_none=True),
-                headers={"Content-Type": "application/json"},
-                success_statuses={200}
-            )
-            
-            # Парсим ответ через модель
-            # embed_response = EmbedResponse(**response.json())
-            embed_response = response # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-            
-            # Извлекаем данные в зависимости от типа запроса
+            url = f"{self._encoders[encoder_name]}{EPNames.EMBED}"
+
+            # Если в на входе единственный текст, 
+            # для единообразия сделаем из него батч длиной 1
             if isinstance(inputs, str):
-                return embed_response.embedding
-            else:
-                return embed_response.embeddings
+                inputs = [inputs]
+
+            embeddings_batch: List[List[TokenInfo]] = []
+            # Делим на батчи в соответствии с максимально допустимой длиной батча энкодера
+            for i in range(0, len(inputs), max_batch_size):
+                # используем срез, не будет ли ошибки с последним "неполным" куском??
+                inputs_part = inputs[i: i + max_batch_size]
+                # Создаём типизированный запрос
+                request = EmbedRequest(
+                    inputs=inputs_part,
+                    prompt_name=prompt_type,
+                    normalize=normalize,
+                    truncate=True
+                )
+                
+                embed_response = await client.post_with_retry(
+                    url=url,
+                    json=request.model_dump(exclude_none=True),
+                    headers={"Content-Type": "application/json"}
+                )
+                
+                # Парсим (валидируем) ответ через адаптер
+                embeddings = embed_response_adaptor.validate_json(embed_response.text)
+
+                # Убедимся, что длина ответа совпадает с длиной переданных текстов
+                if len(embeddings) != len(inputs_part):
+                    logger.warning(
+                        "Unexpected /tokenize response length: "
+                        f"got {len(embeddings)} while expected {len(inputs_part)}"
+                    )
+                    return None
+                
+                embeddings_batch.extend(embeddings)
+            
+            return embeddings_batch
                 
         except Exception as e:
             logger.error(f"TEI embed request to {encoder_name} failed: {e}")
             return None
+        
     
     async def _request_tokenize(
         self,
         encoder_name: str,
-        inputs: Union[str, List[str]],
-        is_batch: bool = False
-    ) -> Optional[Union[int, List[int]]]:
+        inputs: Union[str, List[str]]
+    ) -> Optional[List[List[TokenInfo]]]:
         """
         Выполняет запрос к TEI /tokenize endpoint.
-        Использует TokenizeRequest и TokenizeResponse модели.
+
+        Автоматически делит входной батчи на части в соответствии 
+        с ограничением энкодера (у TEI есть max_client_batch_size)
         """
-        client = await (self._get_batch_client(encoder_name) if is_batch 
-                       else self._get_base_client(encoder_name))
-        
+
+        client = self._get_http_client(encoder_name)
         if not client:
             return None
         
+        enc_info = await self._get_encoder_info(encoder_name)
+        if not enc_info:
+            return None
+        
+        # Будем учитывать ограничение конкретного TEI на размер батча
+        max_batch_size = enc_info.max_client_batch_size
+        
         try:
-            url = f"{self._encoders[encoder_name]}/tokenize"
-            
-            # Создаём типизированный запрос
-            request = TokenizeRequest(
-                inputs=inputs,
-                add_special_tokens=True,
-                truncate=True
-            )
-            
-            response = await client.post_with_retry(
-                url=url,
-                json=request.model_dump(exclude_none=True),
-                headers={"Content-Type": "application/json"},
-                success_statuses={200}
-            )
-            
-            # Парсим ответ через модель
-            # tokenize_response = TokenizeResponse(**response.json())
-            tokenize_response = response # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-            
-            # Извлекаем данные в зависимости от типа запроса
+            url = f"{self._encoders[encoder_name]}{EPNames.TOKENIZE}"
+
+            # Если в на входе единственный текст, 
+            # для единообразия сделаем из него батч длиной 1
             if isinstance(inputs, str):
-                return tokenize_response.tokens_count
-            else:
-                return tokenize_response.tokens_counts
+                inputs = [inputs]
+
+
+            tokens_batch:List[List[TokenInfo]] = []
+            # Делим на батчи в соответствии с максимально допустимой длиной батча энкодера
+            for i in range(0, len(inputs), max_batch_size):
+                # используем срез, не будет ли ошибки с последним "неполным" куском??
+                inputs_part = inputs[i: i + max_batch_size]
+                # Создаём типизированный запрос
+                request = TokenizeRequest(
+                    inputs=inputs_part,
+                    add_special_tokens=True,
+                    truncate=True
+                )
+                
+                tokenize_response = await client.post_with_retry(
+                    url=url,
+                    json=request.model_dump(exclude_none=True),
+                    headers={"Content-Type": "application/json"}
+                )
+                
+                # Парсим ответ через pydantic адаптер
+                tokens: List[List[TokenInfo]] = tokenize_response_adaptor.validate_json(
+                    tokenize_response.text
+                )
+
+                # Убедимся, что длина ответа совпадает с длиной переданных текстов
+                if len(tokens) != len(inputs_part):
+                    logger.warning(
+                        "Unexpected /tokenize response length: "
+                        f"got {len(tokens)} while expected {len(inputs_part)}"
+                    )
+                    return None
+                
+                tokens_batch.extend(tokens)
+            
+            return tokens_batch
                 
         except Exception as e:
             logger.error(f"TEI tokenize request to {encoder_name} failed: {e}")
@@ -327,7 +386,11 @@ class EncoderClient:
         request_func,
         **kwargs
     ) -> Dict[str, Optional[Any]]:
-        """Выполняет параллельные запросы к нескольким энкодерам."""
+        """
+        Выполняет параллельные запросы к нескольким энкодерам.
+
+        """
+        # Сначала выясним, какие сервисы из запрошенных "живы"
         available = await self._ensure_encoders(encoder_names)
         
         if not available:
@@ -354,13 +417,13 @@ class EncoderClient:
         return results
     
     # ----------------------------------------------------------------------
-    # Публичные методы (сигнатуры НЕ МЕНЯЮТСЯ)
+    # Публичные методы
     # ----------------------------------------------------------------------
     
     async def encode_text(
         self,
         text: str,
-        request_type: Optional[str] = "query",
+        prompt_type: Optional[str] = PromptType.QUERY,
         use_encoders: Optional[List[str]] = None
     ) -> Dict[str, Optional[List[float]]]:
         """Кодирует один текст в вектор."""
@@ -371,20 +434,29 @@ class EncoderClient:
             encoder_names=use_encoders,
             request_func=self._request_embed,
             inputs=text,
-            request_type=request_type,
-            normalize=True,
-            is_batch=False
+            prompt_type=prompt_type,
+            normalize=True
         )
-        
-        return results
+        # _request_embed(), как и сам TEI, даже для одиночного текста 
+        # возвращает массив массивов. 
+        # Но наш публичный метод encode_text() 
+        # для одного текста должен возвращать один вектор (для каждого энкодера)
+        return {
+            encoder: emb[0] if (emb and isinstance(emb, list) and len(emb)) else None 
+            for encoder, emb in results.items()
+        }
     
     async def encode_batch(
         self,
         texts: List[str],
-        request_type: Optional[str] = "query",
+        prompt_type: Optional[str] = PromptType.QUERY,
         use_encoders: Optional[List[str]] = None
     ) -> Dict[str, Optional[List[List[float]]]]:
         """Пакетное кодирование текстов."""
+
+        if not texts:
+            return {encoder: None for encoder in (use_encoders or self._encoders)}
+
         if use_encoders is None:
             use_encoders = list(self._encoders.keys())
         
@@ -392,9 +464,8 @@ class EncoderClient:
             encoder_names=use_encoders,
             request_func=self._request_embed,
             inputs=texts,
-            request_type=request_type,
-            normalize=True,
-            is_batch=True
+            prompt_type=prompt_type,
+            normalize=True
         )
         
         return results
@@ -408,12 +479,29 @@ class EncoderClient:
         if use_encoders is None:
             use_encoders = list(self._encoders.keys())
         
-        results = await self._request_multiple(
+        tokenize_results: Dict[str, Optional[List[List[TokenInfo]]]] = await self._request_multiple(
             encoder_names=use_encoders,
             request_func=self._request_tokenize,
-            inputs=text,
-            is_batch=False
+            inputs=text
         )
+        # TEI не имеет отдельного эндпойнта для простого подсчета токенов, 
+        # вместо этого он возвращает полную информацию по каждому токену.
+        # Поэтому и _request_tokenize() также возвращает детальную информацию 
+        # по токенам List[List[TokenInfo]].
+        # В данном методе нас интересует только длина текста в токенах,
+        # аккуратно извлечем ее из результатов токенизации.
+        results = dict()
+        for encoder, tokens_batch in tokenize_results.items():
+            # Эта функция - для одиночного текста, но _request_tokenize в любом случае 
+            # возвращает массив массивов, как будто обрабатывался батч длиной 1. 
+            # Поэтому специально называем переменную - tokens_batch 
+            # и берем из нее единственный элемент (с индексом 0)
+            if tokens_batch and isinstance(tokens_batch, list) and len(tokens_batch):
+                tokens_list = tokens_batch[0]
+                if tokens_list and isinstance(tokens_list, list):
+                    results[encoder] = len(tokens_list)
+                    continue
+            results[encoder] = None
         
         return results
     
@@ -421,33 +509,40 @@ class EncoderClient:
         self,
         texts: List[str],
         use_encoders: Optional[List[str]] = None
-    ) -> Optional[List[Dict[str, Optional[int]]]]:
-        """Подсчитывает количество токенов для нескольких текстов."""
+    ) -> Dict[str, Optional[List[int]]]:
+        """
+        Подсчитывает количество токенов для нескольких текстов.
+        
+        Возвращает словарь, в котором ключи - имена энкодеров, 
+        а значения - списки, содержащие количества токенов в текстах входного батча
+        """
+        if not texts:
+            return {encoder: None for encoder in (use_encoders or self._encoders)}
+        
         if use_encoders is None:
             use_encoders = list(self._encoders.keys())
         
-        if not texts:
-            return []
-        
-        encoder_results = await self._request_multiple(
+        tokenize_results: Dict[str, Optional[List[List[TokenInfo]]]] = await self._request_multiple(
             encoder_names=use_encoders,
             request_func=self._request_tokenize,
-            inputs=texts,
-            is_batch=True
+            inputs=texts
         )
+
+        # TEI не имеет отдельного эндпойнта для простого подсчета токенов, 
+        # вместо этого он возвращает полную информацию по каждому токену.
+        # Поэтому и _request_tokenize() также возвращает детальную информацию 
+        # по токенам List[List[TokenInfo]].
+        # В данном методе нас интересует только длина текста в токенах,
+        # аккуратно извлечем ее из результатов токенизации.
         
-        final_results = []
-        for i in range(len(texts)):
-            text_result = {}
-            for encoder_name in use_encoders:
-                encoder_counts = encoder_results.get(encoder_name)
-                if encoder_counts and isinstance(encoder_counts, list) and i < len(encoder_counts):
-                    text_result[encoder_name] = encoder_counts[i]
-                else:
-                    text_result[encoder_name] = None
-            final_results.append(text_result)
+        results = dict()
+        for encoder, tokens_batch in tokenize_results.items():
+            if tokens_batch and isinstance(tokens_batch, list) and len(tokens_batch):
+                results[encoder] = [len(tokens) for tokens in tokens_batch if isinstance(tokens, list)]
+            else:
+                results[encoder] = None
         
-        return final_results
+        return results
     
     # ----------------------------------------------------------------------
     # Методы для получения информации (тоже используют типизированные ответы)
@@ -519,7 +614,7 @@ class EncoderClient:
     
     async def health_check(self, encoder_name: str) -> bool:
         """Проверяет доступность конкретного энкодера."""
-        client = await self._get_base_client(encoder_name)
+        client = self._get_http_client(encoder_name)
         if not client:
             return False
         
@@ -557,7 +652,7 @@ class EncoderClient:
         """Корректное закрытие всех HTTP клиентов."""
         close_tasks = []
         
-        for client_dict in [self._base_clients, self._batch_clients]:
+        for client_dict in [self._http_clients, self._batch_clients]:
             for client in client_dict.values():
                 if client is not None:
                     close_tasks.append(client.close())
@@ -565,7 +660,7 @@ class EncoderClient:
         if close_tasks:
             await asyncio.gather(*close_tasks, return_exceptions=True)
         
-        self._base_clients = {name: None for name in self._encoders}
+        self._http_clients = {name: None for name in self._encoders}
         self._batch_clients = {name: None for name in self._encoders}
         logger.debug("EncoderClient closed")
 
