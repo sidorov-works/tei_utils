@@ -545,7 +545,7 @@ class EncoderClient:
         return results
     
     # ----------------------------------------------------------------------
-    # Методы для получения информации (тоже используют типизированные ответы)
+    # Методы для получения информации 
     # ----------------------------------------------------------------------
     
     async def get_vector_size(self, encoder_name: str) -> Optional[int]:
@@ -557,14 +557,27 @@ class EncoderClient:
         self,
         use_encoders: Optional[List[str]] = None
     ) -> Dict[str, Optional[int]]:
-        """Возвращает размерности векторов для нескольких энкодеров."""
+        """
+        Возвращает размерности векторов для нескольких энкодеров.
+        """
         if use_encoders is None:
             use_encoders = list(self._encoders.keys())
         
+        # Создаем задачи для параллельного выполнения
+        tasks = {
+            name: self._get_encoder_info(name)
+            for name in use_encoders
+        }
+        
+        # Запускаем все задачи параллельно
         results = {}
-        for name in use_encoders:
-            info = await self._get_encoder_info(name)
-            results[name] = info.dimension if info else None
+        for name, task in tasks.items():
+            try:
+                info = await task
+                results[name] = info.dimension if info else None
+            except Exception as e:
+                logger.error(f"Failed to get vector size for {name}: {e}")
+                results[name] = None
         
         return results
     
@@ -577,14 +590,27 @@ class EncoderClient:
         self,
         use_encoders: Optional[List[str]] = None
     ) -> Dict[str, Optional[int]]:
-        """Возвращает максимальные длины для нескольких энкодеров."""
+        """
+        Возвращает максимальные длины для нескольких энкодеров.
+        """
         if use_encoders is None:
             use_encoders = list(self._encoders.keys())
         
+        # Создаем задачи для параллельного выполнения
+        tasks = {
+            name: self._get_encoder_info(name)
+            for name in use_encoders
+        }
+        
+        # Запускаем все задачи параллельно
         results = {}
-        for name in use_encoders:
-            info = await self._get_encoder_info(name)
-            results[name] = info.max_input_length if info else None
+        for name, task in tasks.items():
+            try:
+                info = await task
+                results[name] = info.max_input_length if info else None
+            except Exception as e:
+                logger.error(f"Failed to get max length for {name}: {e}")
+                results[name] = None
         
         return results
     
@@ -597,14 +623,27 @@ class EncoderClient:
         self,
         use_encoders: Optional[List[str]] = None
     ) -> Dict[str, Optional[str]]:
-        """Возвращает названия моделей для нескольких энкодеров."""
+        """
+        Возвращает названия моделей для нескольких энкодеров.
+        """
         if use_encoders is None:
             use_encoders = list(self._encoders.keys())
         
+        # Создаем задачи для параллельного выполнения
+        tasks = {
+            name: self._get_encoder_info(name)
+            for name in use_encoders
+        }
+        
+        # Запускаем все задачи параллельно
         results = {}
-        for name in use_encoders:
-            info = await self._get_encoder_info(name)
-            results[name] = info.model_id if info else None
+        for name, task in tasks.items():
+            try:
+                info = await task
+                results[name] = info.model_id if info else None
+            except Exception as e:
+                logger.error(f"Failed to get model name for {name}: {e}")
+                results[name] = None
         
         return results
     
