@@ -15,12 +15,11 @@ from .tei_models import (
 from typing import List, Optional, Dict, Any, Union
 import asyncio
 from http_utils import RetryableHTTPClient, create_signed_client, AuthType
-from enum import Enum
 
 import logging
 logger = logging.getLogger(__name__)
 
-class EPNames(Enum):
+class EPNames:
     """
     Названия используемых эндпойнтов TEI
     """
@@ -29,7 +28,7 @@ class EPNames(Enum):
     INFO = "/info"
     HEALTH = "/health"
 
-class PromptType(Enum):
+class PromptType:
     """
     Типы промптов для TEI
     """
