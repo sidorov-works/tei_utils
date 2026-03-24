@@ -190,7 +190,7 @@ class EncoderClient:
                 embed_url = f"{self._encoders[encoder_name]}{EPNames.EMBED}"
                 logger.debug(f"Fetching {encoder_name} vector dimension at {embed_url}")
                 TEST_TEXT = "i"
-                embed_request = EmbedRequest(TEST_TEXT)
+                embed_request = EmbedRequest(inputs=TEST_TEXT)
                 embed_response = await client.post_with_retry(
                     url=embed_url,
                     json=embed_request.model_dump(exclude_none=True),
