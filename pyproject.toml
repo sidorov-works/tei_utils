@@ -1,6 +1,6 @@
 [project]
 name = "tei-utils"
-version = "0.1.5"
+version = "0.1.6"
 description = "Custom Hugging Face TEI client"
 authors = [{name = "Oleg Sidorov", email = "sidorov.works@yandex.ru"}]
 license = {text = "MIT"}

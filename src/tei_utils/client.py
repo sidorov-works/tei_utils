@@ -184,7 +184,7 @@ class EncoderClient:
                 
                 data = info_response.json()
                 # Запоминаем основные данные энкодера (пока без dimension)
-                encoder_info = EncoderInfo(**data)
+                encoder_info = EncoderInfo.model_validate(data)
 
                 # Теперь с помощью отдельного запроса /embed выясним размерность вектора
                 embed_url = f"{self._encoders[encoder_name]}{EPNames.EMBED}"
