@@ -60,7 +60,39 @@ client = EncoderClient(
 - URL энкодеров должны указывать на корень TEI сервиса (например, `http://localhost:8080`)
 - Все энкодеры используют единый секретный ключ для Bearer аутентификации
 - Клиент автоматически запрашивает `/info` при первом обращении к энкодеру
-- Информация об энкодере (размерность вектора, максимальная длина) кэшируется
+- Информация об энкодере (размерность вектора, максимальная длина, доступные промпты) кэшируется
+
+## Автоопределение промптов
+
+**Клиент автоматически определяет правильные имена промптов для каждой модели** через эндпоинт `/info`.
+
+Разные модели используют разные имена для query и document промптов:
+- `BAAI/bge-*`: `search_query` / `search_document`
+- `intfloat/e5-*`: `query` / `document`
+- `snowflake/snowflake-arctic-embed-*`: `query` / `document`
+- `ai-forever/FRIDA`: `search_query` / `search_document`
+
+Клиент:
+1. Запрашивает `/info` при первом обращении к энкодеру
+2. Парсит поле `prompts` — список всех доступных промптов с их текстами
+3. Фильтрует только промпты с непустым текстом
+4. По имени находит подходящие для `query` и `document`
+5. Кеширует найденные имена
+
+```python
+# Клиент сам подставит правильное имя промпта для каждой модели
+query_vector = await client.encode_text(
+    "search query",
+    prompt_type=PromptType.QUERY      # 'query' для E5, 'search_query' для BGE
+)
+
+doc_vector = await client.encode_text(
+    "document text", 
+    prompt_type=PromptType.DOCUMENT   # 'document' для E5, 'search_document' для BGE
+)
+```
+
+Если у модели нет промпта для указанного типа, запрос отправляется без `prompt_name`.
 
 ## Использование
 
@@ -86,14 +118,21 @@ batch_result = await client.encode_batch(texts)
 #     "bge-large": [[...], [...], [...]]    # три вектора
 # }
 
-# С указанием типа промпта (для моделей, обученных на пары query/document)
+# С указанием типа промпта
+# Клиент автоматически подставит правильное имя для каждой модели
 query_vector = await client.encode_text(
     "search query",
-    prompt_type=PromptType.QUERY
+    prompt_type=PromptType.QUERY     # автоопределение имени
 )
 doc_vector = await client.encode_text(
     "document text",
-    prompt_type=PromptType.DOCUMENT
+    prompt_type=PromptType.DOCUMENT  # автоопределение имени
+)
+
+# Можно передать явное имя промпта (минуя автоопределение)
+custom_vector = await client.encode_text(
+    "text",
+    prompt_type="classification"     # напрямую передается в prompt_name
 )
 ```
 
@@ -145,6 +184,7 @@ if vectors["bge-large"] is None:
 
 ## Особенности
 
+- 🔄 **Автоматическое определение промптов** — клиент сам узнает имена промптов у каждой модели через `/info`
 - 🔄 **Автоматический батчинг** — клиент сам разбивает большие списки текстов на части, учитывая `max_client_batch_size` из `/info`
 - ⚡ **Параллельные запросы** — при работе с несколькими энкодерами запросы выполняются одновременно
 - 🔁 **Повторные попытки** — экспоненциальная задержка с jitter для сетевых ошибок и 5xx/429 статусов
