@@ -33,7 +33,7 @@ class EmbedRequest(NestedBase):
         description="Text or list of texts to embed"
     )
 
-    prompt_name: Optional[Literal['query', 'document']] = Field(
+    prompt_name: Optional[str] = Field(
         None, 
         description="Name of prompt template (e.g., 'query', 'document')"
     )
@@ -115,6 +115,11 @@ tokenize_response_adaptor = TypeAdapter(List[List[TokenInfo]])
 
 # GET запрос к /info не требует параметров
 
+class PromptInfo(BaseModel):
+    """Информация о промпте"""
+    name: str = Field(..., description="Prompt name to use in prompt_name field")
+    text: str = Field(..., description="Text that will be prepended to input")
+
 class InfoResponse(NestedBase):
     """
     Ответ от /info endpoint в формате TEI.
@@ -123,6 +128,7 @@ class InfoResponse(NestedBase):
     - model_id: идентификация модели
     - max_input_length: ограничение на длину текста
     - max_client_batch_size: ограничение на размер батча
+    - prompts: список промптов, доступных для модели 
     
     Размерность вектора (dimension) не входит в официальную спецификацию TEI.
     Клиент должен определять её отдельно через тестовый запрос к /embed.
@@ -143,3 +149,4 @@ class InfoResponse(NestedBase):
         description="Maximum number of texts allowed in a single /embed request. "
                     "Client must split larger batches." 
     )
+    prompts: List[PromptInfo] = Field(None, description="Available prompts for this model")

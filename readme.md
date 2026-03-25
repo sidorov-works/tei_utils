@@ -29,7 +29,7 @@ vectors = await client.encode_text("Hello world")
 ## Установка
 
 ```bash
-pip install git+https://github.com/sidorov-works/tei_utils.git@v0.1.7
+pip install git+https://github.com/sidorov-works/tei_utils.git@v0.1.8
 ```
 
 ## Инициализация клиента

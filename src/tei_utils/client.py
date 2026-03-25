@@ -15,6 +15,7 @@ from .tei_models import (
 from typing import List, Optional, Dict, Any, Union
 import asyncio
 from http_utils import RetryableHTTPClient, create_signed_client, AuthType
+from pydantic import Field
 
 import logging
 logger = logging.getLogger(__name__)
@@ -30,18 +31,30 @@ class EPNames:
 
 class PromptType:
     """
-    Типы промптов для TEI
+    Типы промптов для TEI.
+
+    ВАЖНО: тип промптра - это НЕ prompt_name для энкодера, 
+    а просто указание на желаемый промпт, 
+    имя которого должно быть выяснено отдельно
     """
     QUERY = "query"
     DOCUMENT = "document"
+
 
 # Структура InfoResponse содержит не все данные, 
 # необходимые для работы клиента. В частности TEI не сообщают 
 # в ответе /info важнейший параметр - размерность вектора. 
 # Поэтому создадим дополнительную pydantic модель EncoderInfo, 
-# в которой данный параметр (dimension) будет присутствовать
+# в которой данный параметр (dimension) будет присутствовать. 
+# Также дополним метаданные именами промптов для типов PromptType
 class EncoderInfo(InfoResponse):
+    """
+    Полные метаданные по энкодеру. Включает в себя
+    """
     dimension: Optional[int] = None
+    prompt_names: Dict[str, Optional[str]] = Field(
+        default_factory=lambda: {PromptType.QUERY: None, PromptType.DOCUMENT: None}
+    )
 
 class EncoderClient:
     """
@@ -186,6 +199,17 @@ class EncoderClient:
                 # Запоминаем основные данные энкодера (пока без dimension)
                 encoder_info = EncoderInfo.model_validate(data)
 
+                # Если присутствует информация о промптах эмбеддинговой модели, 
+                # найдем имена промптов (prompt_name) для применяемых типов 
+                # PromptType.QUERY и PromptType.DOCUMENT
+                if encoder_info.prompts:
+                    for prompt_info in encoder_info.prompts:
+                        if prompt_info.text:
+                            if "query" in prompt_info.name.lower():
+                                encoder_info.prompt_names[PromptType.QUERY] = prompt_info.name
+                            elif "document" in prompt_info.name.lower():
+                                encoder_info.prompt_names[PromptType.DOCUMENT] = prompt_info.name
+
                 # Теперь с помощью отдельного запроса /embed выясним размерность вектора
                 embed_url = f"{self._encoders[encoder_name]}{EPNames.EMBED}"
                 logger.debug(f"Fetching {encoder_name} vector dimension at {embed_url}")
@@ -200,7 +224,7 @@ class EncoderClient:
                 embeddings = embed_response_adaptor.validate_json(embed_response.text)
                 dimension = len(embeddings[0])
                 encoder_info.dimension = dimension
-                # Теперь информация о сервисе (энкодере) - полная: INFO_RESPONSE плюс dimension
+                # Теперь информация о сервисе (энкодере) - полная: INFO_RESPONSE плюс dimension и prompt_names
                 self._encoder_info[encoder_name] = encoder_info
                 
                 logger.info(f"✅ Encoder '{encoder_name}' initialized: {encoder_info.model_id}")
@@ -269,7 +293,7 @@ class EncoderClient:
             if isinstance(inputs, str):
                 inputs = [inputs]
 
-            embeddings_batch: List[List[TokenInfo]] = []
+            embeddings_batch: List[List[float]] = []
             # Делим на батчи в соответствии с максимально допустимой длиной батча энкодера
             for i in range(0, len(inputs), max_batch_size):
                 # используем срез, не будет ли ошибки с последним "неполным" куском??
@@ -277,7 +301,7 @@ class EncoderClient:
                 # Создаём типизированный запрос
                 request = EmbedRequest(
                     inputs=inputs_part,
-                    prompt_name=prompt_type,
+                    prompt_name=enc_info.prompt_names.get(prompt_type),
                     normalize=normalize,
                     truncate=True
                 )
@@ -690,14 +714,12 @@ class EncoderClient:
         """Корректное закрытие всех HTTP клиентов."""
         close_tasks = []
         
-        for client_dict in [self._http_clients, self._batch_clients]:
-            for client in client_dict.values():
-                if client is not None:
-                    close_tasks.append(client.close())
+        for client in self._http_clients.values():
+            if client is not None:
+                close_tasks.append(client.close())
         
         if close_tasks:
             await asyncio.gather(*close_tasks, return_exceptions=True)
         
         self._http_clients = {name: None for name in self._encoders}
-        self._batch_clients = {name: None for name in self._encoders}
         logger.debug("EncoderClient closed")
