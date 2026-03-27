@@ -266,6 +266,7 @@ class EncoderClient:
         encoder_name: str,
         inputs: Union[str, List[str]],
         prompt_type: Optional[str] = None,
+        prompt_name: Optional[str] = None,
         normalize: bool = True
     ) -> Optional[List[List[float]]]:
         """
@@ -273,6 +274,13 @@ class EncoderClient:
 
         Автоматически делит входной батчи на части в соответствии 
         с ограничением энкодера (у TEI есть max_client_batch_size)
+
+        Args:
+            prompt_type: тип промпта "query" или "document". Это не название промпта в энкодере! 
+                При переданном prompt_type клиент автоматически выберет подходящее имя промпта. 
+                Если prompt_type явно указан, то значение аргумента ptompt_name игнорируется
+
+            prompt_name: имя промпта эмбеддинговой модели. Игнорируется, если явно задан prompt_type
         """
         client = self._get_http_client(encoder_name) 
         if not client:
@@ -281,6 +289,9 @@ class EncoderClient:
         enc_info = await self._get_encoder_info(encoder_name)
         if not enc_info:
             return None
+        
+        if prompt_type:
+            prompt_name = enc_info.prompt_names.get(prompt_type)
         
         # Будем учитывать ограничение конкретного TEI на размер батча
         max_batch_size = enc_info.max_client_batch_size
@@ -301,7 +312,7 @@ class EncoderClient:
                 # Создаём типизированный запрос
                 request = EmbedRequest(
                     inputs=inputs_part,
-                    prompt_name=enc_info.prompt_names.get(prompt_type),
+                    prompt_name=prompt_name,
                     normalize=normalize,
                     truncate=True
                 )
@@ -447,9 +458,20 @@ class EncoderClient:
         self,
         text: str,
         prompt_type: Optional[str] = PromptType.QUERY,
+        prompt_name: Optional[str] = None,
         use_encoders: Optional[List[str]] = None
     ) -> Dict[str, Optional[List[float]]]:
-        """Кодирует один текст в вектор."""
+        """
+        Кодирует один текст в вектор.
+
+        Args:
+            prompt_type: тип промпта "query" или "document". Это не название промпта в энкодере! 
+                При переданном prompt_type клиент автоматически выберет подходящее имя промпта. 
+                Если prompt_type явно указан, то значение аргумента ptompt_name игнорируется
+
+            prompt_name: имя промпта эмбеддинговой модели. Игнорируется, если явно задан prompt_type
+        
+        """
         if use_encoders is None:
             use_encoders = list(self._encoders.keys())
         
@@ -458,6 +480,7 @@ class EncoderClient:
             request_func=self._request_embed,
             inputs=text,
             prompt_type=prompt_type,
+            prompt_name=prompt_name,
             normalize=True
         )
         # _request_embed(), как и сам TEI, даже для одиночного текста 
@@ -473,9 +496,19 @@ class EncoderClient:
         self,
         texts: List[str],
         prompt_type: Optional[str] = PromptType.QUERY,
+        prompt_name: Optional[str] = None,
         use_encoders: Optional[List[str]] = None
     ) -> Dict[str, Optional[List[List[float]]]]:
-        """Пакетное кодирование текстов."""
+        """
+        Пакетное кодирование текстов.
+        
+        Args:
+            prompt_type: тип промпта "query" или "document". Это не название промпта в энкодере! 
+                При переданном prompt_type клиент автоматически выберет подходящее имя промпта. 
+                Если prompt_type явно указан, то значение аргумента ptompt_name игнорируется
+
+            prompt_name: имя промпта эмбеддинговой модели. Игнорируется, если явно задан prompt_type
+        """
 
         if not texts:
             return {encoder: None for encoder in (use_encoders or self._encoders)}
@@ -488,6 +521,7 @@ class EncoderClient:
             request_func=self._request_embed,
             inputs=texts,
             prompt_type=prompt_type,
+            prompt_name=prompt_name,
             normalize=True
         )
         
