@@ -68,7 +68,7 @@ class EncoderClient:
     def __init__(
             self,
             encoders: Dict[str, str],
-            secret: str,
+            secret: Optional[str] = None,
             request_timeout: float = 30.0,
             total_timeout: float = 60.0
         ):
@@ -147,13 +147,17 @@ class EncoderClient:
                 max_delay=10.0,
                 total_timeout=self._request_timeout * 2
             )
-            # Оборачиваем http клиента для автоматического подписания запросов
-            self._http_clients[encoder_name] = create_signed_client(
-                client,
-                secret=self._secret,
-                service_name="encoder-client",
-                auth_type=AuthType.SECRET_HEADER_AUTH
-            )
+            # Оборачиваем http клиента для автоматического подписания запросов 
+            # только в том случае, если при создании клиента был передан secret
+            if self._secret:
+                self._http_clients[encoder_name] = create_signed_client(
+                    client,
+                    secret=self._secret,
+                    service_name="encoder-client",
+                    auth_type=AuthType.SECRET_HEADER_AUTH
+                )
+            else:
+                self._http_clients[encoder_name] = client
         
         return self._http_clients[encoder_name]
     
@@ -457,7 +461,7 @@ class EncoderClient:
     async def encode_text(
         self,
         text: str,
-        prompt_type: Optional[str] = PromptType.QUERY,
+        prompt_type: Optional[str] = None,
         prompt_name: Optional[str] = None,
         use_encoders: Optional[List[str]] = None
     ) -> Dict[str, Optional[List[float]]]:
@@ -495,7 +499,7 @@ class EncoderClient:
     async def encode_batch(
         self,
         texts: List[str],
-        prompt_type: Optional[str] = PromptType.QUERY,
+        prompt_type: Optional[str] = None,
         prompt_name: Optional[str] = None,
         use_encoders: Optional[List[str]] = None
     ) -> Dict[str, Optional[List[List[float]]]]:
