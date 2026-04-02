@@ -80,16 +80,15 @@ class EncoderClient(BaseClient):
         
         async with self._init_locks[server_name]:
             # Double-check после захвата блокировки
-            if server_name in self._encoder_extra_info:
-                existing = self._encoder_extra_info[server_name]
-                if existing is not None:
-                    return existing
+            if encoder_extra := self._encoder_extra_info.get(server_name):
+                return encoder_extra
             
             # Получаем базовую информацию через родительский метод
             server_info = await self._get_server_info(server_name)
             if not server_info:
                 logger.warning(f"Failed to get base info for encoder '{server_name}'")
                 return None
+            logger.debug(f"server_info: {server_info}")
             
             # Создаем объект для хранения дополнительной информации
             encoder_extra = EncoderExtraInfo()
@@ -105,6 +104,8 @@ class EncoderClient(BaseClient):
                         encoder_extra.prompt_names[PromptType.QUERY] = prompt_info.name
                     elif "document" in name_lower:
                         encoder_extra.prompt_names[PromptType.DOCUMENT] = prompt_info.name
+                        
+            logger.debug(f"encoder_extra: {encoder_extra}")
             
             # 2. Определяем размерность вектора через тестовый запрос /embed
             client = self._get_http_client(server_name)
