@@ -70,6 +70,7 @@ class EncoderClient(BaseClient):
         Returns:
             EncoderExtraInfo или None при ошибке
         """
+        logger.debug("in _get_encoder_extra_info()")
         # Быстрый возврат, если уже есть
         if encoder_extra := self._encoder_extra_info.get(server_name):
             logger.debug(f"encoder_extra: {encoder_extra}")
@@ -459,6 +460,7 @@ class EncoderClient(BaseClient):
     
     async def get_vector_size(self, server_name: str) -> Optional[int]:
         """Возвращает размерность вектора."""
+        logger.debug("Before _get_encoder_extra_info()")
         extra_info = await self._get_encoder_extra_info(server_name)
         return extra_info.dimension if extra_info else None
     
