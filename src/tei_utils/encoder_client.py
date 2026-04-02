@@ -70,29 +70,29 @@ class EncoderClient(BaseClient):
         Returns:
             EncoderExtraInfo или None при ошибке
         """
-        logger.debug("in _get_encoder_extra_info()")
         # Быстрый возврат, если уже есть
         if encoder_extra := self._encoder_extra_info.get(server_name):
-            logger.debug(f"encoder_extra: {encoder_extra}")
             return encoder_extra
-        logger.debug("not existing...")
         
         if server_name not in self._servers:
             logger.error(f"Encoder '{server_name}' not found")
             return None
-        logger.debug(f"{server_name} in _servers")
+        
+        # Получаем базовую информацию через родительский метод 
+        # (чтобы избежать вложенности блокировок выполнояем до явного захвата блокировки)
+        server_info = await self._get_server_info(server_name)
+        if not server_info:
+            logger.warning(f"Failed to get base info for encoder '{server_name}'")
+            # Теоретически при неудачной попытке получить основную информацию о сервере, 
+            # можно было бы попытаться дополнительно получить хотя бы размерность вектора. 
+            # Однако для более строгой логики - при недоступности основной информации 
+            # о сервере отказываем и в дополнительной информации.
+            return None
         
         async with self._init_locks[server_name]:
             # Double-check после захвата блокировки
             if encoder_extra := self._encoder_extra_info.get(server_name):
                 return encoder_extra
-            
-            # Получаем базовую информацию через родительский метод
-            server_info = await self._get_server_info(server_name)
-            if not server_info:
-                logger.warning(f"Failed to get base info for encoder '{server_name}'")
-                return None
-            logger.debug(f"server_info: {server_info}")
             
             # Создаем объект для хранения дополнительной информации
             encoder_extra = EncoderExtraInfo()
@@ -108,8 +108,6 @@ class EncoderClient(BaseClient):
                         encoder_extra.prompt_names[PromptType.QUERY] = prompt_info.name
                     elif "document" in name_lower:
                         encoder_extra.prompt_names[PromptType.DOCUMENT] = prompt_info.name
-
-            logger.debug(f"encoder_extra: {encoder_extra}")
             
             # 2. Определяем размерность вектора через тестовый запрос /embed
             client = self._get_http_client(server_name)
@@ -462,7 +460,6 @@ class EncoderClient(BaseClient):
     
     async def get_vector_size(self, server_name: str) -> Optional[int]:
         """Возвращает размерность вектора."""
-        logger.debug("Before _get_encoder_extra_info()")
         extra_info = await self._get_encoder_extra_info(server_name)
         return extra_info.dimension if extra_info else None
     

@@ -131,6 +131,7 @@ class BaseClient:
         """
         Получает основную информацию об сервере `server_name` через `"/info"`
         """
+        logger.debug("In _get_server_info()")
         if self._server_info.get(server_name) is not None:
             return self._server_info[server_name]
         
