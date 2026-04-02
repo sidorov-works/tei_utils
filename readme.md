@@ -1,203 +1,233 @@
 # TEI Utils
 
-Асинхронный Python клиент для одновременных запросов к нескольким TEI-серверам (Hugging Face Text Embeddings Inference).
+Асинхронный Python клиент для работы с TEI-совместимыми сервисами (Hugging Face Text Embeddings Inference).
+
+Поддерживает:
+- **Эмбеддинги** (`/embed`) — получение векторных представлений текста
+- **Классификацию** (`/predict`) — классификация текста с возвратом меток и вероятностей
+- **Токенизацию** (`/tokenize`) — подсчет токенов
 
 ## Ключевая особенность
 
-**Работа с несколькими TEI серверами одновременно** — клиент позволяет объединить несколько моделей эмбеддингов в одном интерфейсе и получать векторы от всех моделей параллельно за один вызов.
+**Работа с несколькими TEI серверами одновременно** — клиент позволяет объединить несколько сервисов в одном интерфейсе и получать результаты от всех параллельно за один вызов.
 
 ```python
-# Один клиент — несколько моделей
-client = EncoderClient(
-    encoders={
-        "bge-small": "http://localhost:8080",   # быстрая модель
-        "bge-large": "http://localhost:8081",   # точная модель
-        "e5-mistral": "http://localhost:8082"   # мультиязычная
+from tei_utils import EncoderClient, ClassifierClient
+
+# Эмбеддинги от нескольких моделей
+encoder = EncoderClient(
+    servers={
+        "bge-small": "http://localhost:8080",
+        "bge-large": "http://localhost:8081"
     },
     secret="your-secret"
 )
 
-# Получаем эмбеддинги от всех моделей одновременно
-vectors = await client.encode_text("Hello world")
+vectors = await encoder.encode_text("Hello world")
 # {
-#     "bge-small": [0.1, 0.2, ...],   # 384-dim
-#     "bge-large": [0.3, 0.4, ...],   # 1024-dim
-#     "e5-mistral": [0.5, 0.6, ...]   # 4096-dim
+#     "bge-small": [0.1, 0.2, ...],
+#     "bge-large": [0.3, 0.4, ...]
+# }
+
+# Классификация от нескольких моделей
+classifier = ClassifierClient(
+    servers={
+        "toxic": "http://localhost:8082",
+        "sentiment": "http://localhost:8083"
+    }
+)
+
+result = await classifier.classify("Ты идиот!")
+# {
+#     "toxic": [LabelScore(label="toxic", score=0.98), ...],
+#     "sentiment": [LabelScore(label="negative", score=0.99), ...]
 # }
 ```
 
 ## Установка
 
 ```bash
-pip install git+https://github.com/sidorov-works/tei_utils.git@v0.1.10
+pip install git+https://github.com/sidorov-works/tei_utils.git@v0.2.0
 ```
 
-## Инициализация клиента
+## Клиент для эмбеддингов (EncoderClient)
+
+### Инициализация
 
 ```python
 from tei_utils import EncoderClient, PromptType
 
 client = EncoderClient(
-    # Словарь энкодеров: имя -> URL
-    encoders={
-        "bge-small": "http://localhost:8080",     # локальный TEI
-        "bge-large": "http://localhost:8081",     # другой порт
-        "e5-mistral": "https://tei.example.com"   # удаленный сервер
+    # Словарь серверов: имя -> URL
+    servers={
+        "bge-small": "http://localhost:8080",
+        "bge-large": "http://localhost:8081",
+        "e5-mistral": "https://tei.example.com"
     },
     
-    # Секретный ключ для Bearer аутентификации
+    # Секретный ключ для Bearer аутентификации (опционально)
     secret="your-secret-key",
     
     # Таймаут на один HTTP запрос (секунды)
     request_timeout=30.0,
     
-    # Общий таймаут с учетом всех повторных попыток
+    # Общий таймаут с учетом повторных попыток
     total_timeout=60.0
 )
 ```
 
 **Важно:**
-- URL энкодеров должны указывать на корень TEI сервиса (например, `http://localhost:8080`)
-- Все энкодеры используют единый секретный ключ для Bearer аутентификации
-- Клиент автоматически запрашивает `/info` при первом обращении к энкодеру
-- Информация об энкодере (размерность вектора, максимальная длина, доступные промпты) кэшируется
+- URL должны указывать на корень TEI сервиса (например, `http://localhost:8080`)
+- Все серверы используют единый секретный ключ
+- Информация о сервере (размерность вектора, максимальная длина, промпты) кэшируется
 
-## Автоопределение промптов
+### Автоопределение промптов
 
-**Клиент автоматически определяет правильные имена промптов для каждой модели** через эндпоинт `/info`.
+Клиент автоматически определяет имена промптов для query и document через эндпоинт `/info`.
 
-Разные модели используют разные имена для query и document промптов:
+Поддерживаемые модели:
 - `BAAI/bge-*`: `search_query` / `search_document`
 - `intfloat/e5-*`: `query` / `document`
 - `snowflake/snowflake-arctic-embed-*`: `query` / `document`
 - `ai-forever/FRIDA`: `search_query` / `search_document`
 
-Клиент:
-1. Запрашивает `/info` при первом обращении к энкодеру
-2. Парсит поле `prompts` — список всех доступных промптов с их текстами
-3. Фильтрует только промпты с непустым текстом
-4. По имени находит подходящие для `query` и `document`
-5. Кеширует найденные имена
-
 ```python
-# Клиент сам подставит правильное имя промпта для каждой модели
+# Клиент сам подставит правильное имя промпта
 query_vector = await client.encode_text(
     "search query",
-    prompt_type=PromptType.QUERY      # 'query' для E5, 'search_query' для BGE
+    prompt_type=PromptType.QUERY
 )
 
-doc_vector = await client.encode_text(
-    "document text", 
-    prompt_type=PromptType.DOCUMENT   # 'document' для E5, 'search_document' для BGE
-)
-```
-
-Если у модели нет промпта для указанного типа, запрос отправляется без `prompt_name`.
-
-## Использование
-
-### Кодирование текстов
-
-```python
-# Одиночный текст
-result = await client.encode_text("What is machine learning?")
-# {
-#     "bge-small": [0.12, -0.34, ...],   # один вектор
-#     "bge-large": [0.56, -0.78, ...]    # один вектор
-# }
-
-# Пакет текстов
-texts = [
-    "Machine learning is...",
-    "Deep learning is...",
-    "Neural networks..."
-]
-batch_result = await client.encode_batch(texts)
-# {
-#     "bge-small": [[...], [...], [...]],   # три вектора
-#     "bge-large": [[...], [...], [...]]    # три вектора
-# }
-
-# С указанием типа промпта
-# Клиент автоматически подставит правильное имя для каждой модели
-query_vector = await client.encode_text(
-    "search query",
-    prompt_type=PromptType.QUERY     # автоопределение имени
-)
 doc_vector = await client.encode_text(
     "document text",
-    prompt_type=PromptType.DOCUMENT  # автоопределение имени
+    prompt_type=PromptType.DOCUMENT
 )
 
-# Можно передать явное имя промпта (минуя автоопределение)
+# Явное указание имени промпта
 custom_vector = await client.encode_text(
     "text",
-    prompt_type="classification"     # напрямую передается в prompt_name
+    prompt_name="classification"
 )
 ```
 
-### Подсчет токенов
+### Методы EncoderClient
+
+| Метод | Описание |
+|-------|----------|
+| `encode_text(text, prompt_type, prompt_name, use_encoders)` | Кодирует один текст в вектор |
+| `encode_batch(texts, prompt_type, prompt_name, use_encoders)` | Пакетное кодирование текстов |
+| `count_tokens(text, use_encoders)` | Подсчет токенов в тексте |
+| `count_tokens_batch(texts, use_encoders)` | Пакетный подсчет токенов |
+| `get_vector_size(server_name)` | Размерность вектора модели |
+| `get_max_length(server_name)` | Максимальная длина в токенах |
+| `get_model_name(server_name)` | Название модели |
+| `health_check(server_name)` | Проверка доступности сервера |
+| `health_check_all()` | Проверка всех серверов |
+
+## Клиент для классификации (ClassifierClient)
+
+### Инициализация
 
 ```python
-# Одиночный текст
-tokens = await client.count_tokens("Hello world")
-# {"bge-small": 2, "bge-large": 2}
+from tei_utils import ClassifierClient
 
-# Пакет текстов
-tokens_batch = await client.count_tokens_batch(["Hello", "World", "!"])
-# {"bge-small": [1, 1, 1], "bge-large": [1, 1, 1]}
-```
-
-### Работа с отдельными энкодерами
-
-```python
-# Получить информацию только для конкретной модели
-dimension = await client.get_vector_size("bge-small")     # 384
-max_length = await client.get_max_length("bge-small")     # 512
-model_name = await client.get_model_name("bge-small")     # "BAAI/bge-small-en-v1.5"
-
-# Проверка доступности
-is_healthy = await client.health_check("bge-small")       # True/False
-all_healthy = await client.health_check_all()             # {"bge-small": True, ...}
-
-# Использовать только определенные энкодеры
-vectors = await client.encode_text(
-    "Hello",
-    use_encoders=["bge-small"]  # только эта модель
+client = ClassifierClient(
+    servers={
+        "toxic": "http://localhost:8080",
+        "sentiment": "http://localhost:8081"
+    },
+    secret="your-secret-key"
 )
 ```
 
-### Обработка ошибок
+### Методы ClassifierClient
 
 ```python
-# Клиент возвращает None для недоступных энкодеров
-vectors = await client.encode_text("Hello")
+# Классификация одного текста
+result = await client.classify("Ты идиот!")
+# {
+#     "toxic": [
+#         LabelScore(label="toxic", score=0.98),
+#         LabelScore(label="safe", score=0.02)
+#     ]
+# }
+
+# Пакетная классификация
+texts = ["Хорошо!", "Ужасно!"]
+results = await client.classify_batch(texts)
+# {
+#     "sentiment": [
+#         [LabelScore(label="positive", score=0.95), LabelScore(label="negative", score=0.05)],
+#         [LabelScore(label="positive", score=0.02), LabelScore(label="negative", score=0.98)]
+#     ]
+# }
+
+# Получение raw logits вместо softmax
+result = await client.classify("text", raw_scores=True)
+
+# Использовать только определенные классификаторы
+result = await client.classify("text", use_classifiers=["toxic"])
+
+# Получение меток классов
+labels = await client.get_labels("toxic")  # ["toxic", "safe", "insult", "obscene"]
+```
+
+| Метод | Описание |
+|-------|----------|
+| `classify(text, raw_scores, use_classifiers)` | Классификация одного текста |
+| `classify_batch(texts, raw_scores, use_classifiers)` | Пакетная классификация |
+| `get_labels(classifier_name)` | Список меток классов |
+| `get_max_length(server_name)` | Максимальная длина в токенах |
+| `health_check(server_name)` | Проверка доступности |
+| `health_check_all()` | Проверка всех серверов |
+
+## Общие методы для всех клиентов
+
+Все клиенты наследуют от `BaseClient` и имеют:
+
+```python
+# Информация о сервере
+await client.get_model_name("server_name")
+await client.get_max_length("server_name")
+
+# Health checks
+await client.health_check("server_name")
+await client.health_check_all()
+
+# Закрытие
+await client.close()
+```
+
+## Обработка ошибок
+
+```python
+# Клиент возвращает None для недоступных серверов
+vectors = await encoder.encode_text("Hello")
 # {
 #     "bge-small": [0.1, 0.2, ...],  # доступен
 #     "bge-large": None              # недоступен
 # }
 
-# Проверяйте наличие результата
 if vectors["bge-large"] is None:
     print("BGE Large is not available")
 ```
 
 ## Особенности
 
-- 🔄 **Автоматическое определение промптов** — клиент сам узнает имена промптов у каждой модели через `/info`
-- 🔄 **Автоматический батчинг** — клиент сам разбивает большие списки текстов на части, учитывая `max_client_batch_size` из `/info`
-- ⚡ **Параллельные запросы** — при работе с несколькими энкодерами запросы выполняются одновременно
-- 🔁 **Повторные попытки** — экспоненциальная задержка с jitter для сетевых ошибок и 5xx/429 статусов
-- 💾 **Ленивая инициализация** — HTTP клиенты создаются только при первом обращении к энкодеру
-- 🔐 **Bearer аутентификация** — автоматическое добавление `Authorization: Bearer <secret>` к каждому запросу
-- 📝 **Pydantic валидация** — строгая типизация запросов и ответов TEI
-- 🏥 **Health check перед запросами** — клиент проверяет доступность энкодеров перед отправкой
+- 🔄 **Автоматическое определение промптов** (для эмбеддингов)
+- 🔄 **Автоматический батчинг** — разбиение больших списков согласно `max_client_batch_size`
+- ⚡ **Параллельные запросы** — к нескольким серверам одновременно
+- 🔁 **Повторные попытки** — экспоненциальная задержка для сетевых ошибок и 5xx/429
+- 💾 **Ленивая инициализация** — HTTP клиенты создаются при первом обращении
+- 🔐 **Bearer аутентификация** — автоматическое добавление `Authorization: Bearer <secret>`
+- 📝 **Pydantic валидация** — строгая типизация запросов и ответов
+- 🏥 **Health check перед запросами** — проверка доступности серверов
 
 ## Требования
 
 - Python >= 3.9
-- `httpx >= 0.28.1` — HTTP клиент
-- `pydantic >= 2.12.5` — валидация данных
+- `httpx >= 0.28.1`
+- `pydantic >= 2.12.5`
 - `http-utils` — обертка с ретраями и аутентификацией
 
 ## Лицензия

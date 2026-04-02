@@ -9,7 +9,7 @@ from typing import Union, List, Optional, Literal
 
 class NestedBase(BaseModel):
     model_config = ConfigDict(
-        extra='ignore', # незнакомые поля просто игнорируются
+        extra='ignore',  # незнакомые поля просто игнорируются
         from_attributes=True
     )
 
@@ -107,6 +107,47 @@ class TokenInfo(NestedBase):
 # то есть опять не получается сделать pydantic модель ответа
 
 tokenize_response_adaptor = TypeAdapter(List[List[TokenInfo]])
+
+
+# ===========================================================================
+# /predict
+# ===========================================================================
+
+class PredictRequest(NestedBase):
+    """
+    Запрос к /predict endpoint в формате TEI.
+
+    Поддерживает как одиночные тексты, так и батчи через поле inputs.
+
+    Наследуем от NestedBase, тем самым допуская, что клиент может передать 
+    дополнительные и неизвестные нашему Encoder Service поля, 
+    которые будут просто игнорироваться.
+    """
+
+    inputs: Union[str, List[str]] = Field(
+        ..., 
+        description="Text or list of texts to predict class"
+    )
+    
+    raw_scores: Optional[bool] = Field(
+        False, 
+        description="Return raw logits instead of softmax probabilities"
+    )
+    truncate: Optional[bool] = Field(
+        True, 
+        description="Whether to truncate inputs to max_input_length"
+    )
+
+class LabelScore(BaseModel):
+    """Вероятность для конретного класса и метка этого класса"""
+    score: float = Field(..., description="Probability score for spicified class")
+    label: str = Field(..., description="Class label")
+
+# В отличие от /embed и /tokenize эндпойнт /predict в случае запроса 
+# для одиночного текста возвращает не массив массивов, а просто массив структур LabelScore
+
+predict_single_response_adaptor = TypeAdapter(List[LabelScore])
+predict_batch_response_adaptor = TypeAdapter(List[List[LabelScore]])
 
 
 # ===========================================================================
