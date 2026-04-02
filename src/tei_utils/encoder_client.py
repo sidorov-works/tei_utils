@@ -72,6 +72,7 @@ class EncoderClient(BaseClient):
         """
         # Быстрый возврат, если уже есть
         if encoder_extra := self._encoder_extra_info.get(server_name):
+            logger.debug(f"encoder_extra: {encoder_extra}")
             return encoder_extra
         
         if server_name not in self._servers:
@@ -104,7 +105,7 @@ class EncoderClient(BaseClient):
                         encoder_extra.prompt_names[PromptType.QUERY] = prompt_info.name
                     elif "document" in name_lower:
                         encoder_extra.prompt_names[PromptType.DOCUMENT] = prompt_info.name
-                        
+
             logger.debug(f"encoder_extra: {encoder_extra}")
             
             # 2. Определяем размерность вектора через тестовый запрос /embed
