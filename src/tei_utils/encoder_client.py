@@ -75,10 +75,12 @@ class EncoderClient(BaseClient):
         if encoder_extra := self._encoder_extra_info.get(server_name):
             logger.debug(f"encoder_extra: {encoder_extra}")
             return encoder_extra
+        logger.debug("not existing...")
         
         if server_name not in self._servers:
             logger.error(f"Encoder '{server_name}' not found")
             return None
+        logger.debug(f"{server_name} in _servers")
         
         async with self._init_locks[server_name]:
             # Double-check после захвата блокировки
