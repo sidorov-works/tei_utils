@@ -47,7 +47,7 @@ result = await classifier.classify("Ты идиот!")
 ## Установка
 
 ```bash
-pip install git+https://github.com/sidorov-works/tei_utils.git@v0.2.6
+pip install git+https://github.com/sidorov-works/tei_utils.git@v0.2.7
 ```
 
 ## Клиент для эмбеддингов (EncoderClient)
