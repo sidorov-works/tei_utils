@@ -30,8 +30,7 @@ class BaseClient:
             self,
             servers: Dict[str, str],
             secret: Optional[str] = None,
-            request_timeout: float = 30.0,
-            total_timeout: float = 60.0
+            request_timeout: float = 60.0
         ):
         """
         Инициализация клиента.
@@ -43,15 +42,11 @@ class BaseClient:
             secret: секретный ключ для аутентификации в TEI сервисах
 
             request_timeout: тайм-аут на выполнение запроса к TEI (без учета ретраев)
-
-            total_timeout: общий тайм-аут на выполнени запроса к TEI с ретраями 
-                (включает как отдельные попытки, так и задержки между попытками)
         """
 
         self._secret = secret
 
         self._request_timeout = request_timeout
-        self._total_timeout = total_timeout
 
         if servers and isinstance(servers, dict):
             self._servers: Dict[str, str] = servers.copy()    
@@ -106,7 +101,7 @@ class BaseClient:
                 max_retries=3,
                 base_delay=1.0,
                 max_delay=10.0,
-                total_timeout=self._total_timeout
+                total_timeout=self._request_timeout * 1.5
             )
             # Оборачиваем http клиента для автоматического подписания запросов 
             # только в том случае, если при создании клиента был передан secret

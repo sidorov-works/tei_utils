@@ -47,7 +47,7 @@ result = await classifier.classify("Ты идиот!")
 ## Установка
 
 ```bash
-pip install git+https://github.com/sidorov-works/tei_utils.git@v0.2.7
+pip install git+https://github.com/sidorov-works/tei_utils.git@v0.3.0
 ```
 
 ## Клиент для эмбеддингов (EncoderClient)
@@ -68,11 +68,8 @@ client = EncoderClient(
     # Секретный ключ для Bearer аутентификации (опционально)
     secret="your-secret-key",
     
-    # Таймаут на один HTTP запрос (секунды)
-    request_timeout=30.0,
-    
-    # Общий таймаут с учетом повторных попыток
-    total_timeout=60.0
+    # Таймаут на один запрос
+    request_timeout=60.0
 )
 ```
 
